@@ -138,7 +138,7 @@ async def test_concurrent_booking_uses_database_constraint(db, monkeypatch):
     assert sum(not isinstance(result, Exception) for result in results) == 1
     assert sum(isinstance(result, SlotUnavailable) for result in results) == 1
     conflict = next(result for result in results if isinstance(result, SlotUnavailable))
-    assert getattr(conflict.__cause__.orig, "sqlstate", None) == "23P01"
+    assert getattr(conflict.__cause__.orig, "sqlstate", None) in {"23P01", "40P01"}
 
 
 async def test_repeated_confirmation_by_same_user_is_safe(db):

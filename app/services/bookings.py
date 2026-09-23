@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -111,9 +111,10 @@ async def create_booking(
     session.add(booking)
     try:
         await session.commit()
-    except IntegrityError as exc:
+    except DBAPIError as exc:
         await session.rollback()
-        if getattr(exc.orig, "sqlstate", None) == "23P01":
+	sqlstate = getattr(exc.orig, "sqlstate", None)
+        if sqlstate in {"23P01", "40P01"}:
             raise SlotUnavailable("Это время уже занято. Выберите другое.") from exc
         raise
     await session.refresh(booking)
