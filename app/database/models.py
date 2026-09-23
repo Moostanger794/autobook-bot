@@ -72,7 +72,7 @@ class Booking(Base):
     start_time: Mapped[time] = mapped_column(Time)
     end_time: Mapped[time] = mapped_column(Time)
     comment: Mapped[str | None] = mapped_column(String(500))
-    status: Mapped[str] = mapped_column(String(20), default=BookingStatus.CONFIRMED)
+    status: Mapped[str] = mapped_column(String(20), default=BookingStatus.PENDING)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

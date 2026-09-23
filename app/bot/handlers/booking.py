@@ -24,6 +24,7 @@ from app.services.bookings import (
     create_booking,
     get_service,
     list_services,
+    normalize_car,
     normalize_phone,
     slots_for_service,
 )
@@ -95,9 +96,10 @@ async def select_service(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BookingFlow.enter_car)
 async def enter_car(message: Message, state: FSMContext) -> None:
-    car = (message.text or "").strip()
-    if not 2 <= len(car) <= 120:
-        await message.answer("Введите марку и модель автомобиля текстом (2–120 символов).")
+    try:
+        car = normalize_car(message.text or "")
+    except ValueError as exc:
+        await message.answer(str(exc))
         return
     await state.update_data(car=car)
     async with session_factory() as session:
@@ -285,7 +287,7 @@ async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
         booking_text(booking, title="✅ Запись создана"), reply_markup=MAIN_MENU
     )
     await notify_admins(
-        callback.bot, get_settings(), booking_text(booking, title="🔥 НОВАЯ ЗАПИСЬ"), booking.id
+        callback.bot, get_settings(), booking_text(booking, title="🔥 НОВАЯ ЗАПИСЬ"), booking
     )
 
 

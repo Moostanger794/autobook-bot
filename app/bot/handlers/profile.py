@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.bot.callbacks import parse_callback_id
-from app.bot.common import booking_text, notify_admins
+from app.bot.common import booking_text, notify_admins, status_label
 from app.config import get_settings
 from app.database.models import BookingStatus
 from app.database.session import session_factory
@@ -37,7 +37,7 @@ async def my_bookings(message: Message) -> None:
         await message.answer(
             f"#{item.id} · {escape(item.service.name)}\n{escape(item.car)}\n"
             f"{item.booking_date:%d.%m.%Y} в {item.start_time:%H:%M}\n"
-            "Статус: подтверждена",
+            f"Статус: {status_label(item.status)}",
             reply_markup=markup,
         )
 
