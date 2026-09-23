@@ -113,7 +113,7 @@ async def create_booking(
         await session.commit()
     except DBAPIError as exc:
         await session.rollback()
-	sqlstate = getattr(exc.orig, "sqlstate", None)
+        sqlstate = getattr(exc.orig, "sqlstate", None)
         if sqlstate in {"23P01", "40P01"}:
             raise SlotUnavailable("Это время уже занято. Выберите другое.") from exc
         raise
