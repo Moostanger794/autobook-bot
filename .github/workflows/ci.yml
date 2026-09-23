@@ -38,7 +38,7 @@ jobs:
       - name: Apply migrations to clean database
         run: alembic upgrade head
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
       - name: Lint
         run: ruff check app tests alembic
       - name: Check formatting

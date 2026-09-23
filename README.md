@@ -53,7 +53,7 @@ docker compose run --rm init python -m app.scripts.seed
 ```bash
 python -m venv .venv
 pip install -r requirements-dev.txt
-pytest -q
+python -m pytest -q
 ruff check app tests
 ```
 
