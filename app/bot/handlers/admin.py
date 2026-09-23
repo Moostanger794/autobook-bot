@@ -156,7 +156,7 @@ async def search_id(message: Message, state: FSMContext) -> None:
         booking = await get_booking(session, booking_id)
     await message.answer(
         booking_text(booking) if booking else "Запись не найдена.",
-        reply_markup=admin_booking_markup(booking.id) if booking else None,
+        reply_markup=admin_booking_markup(booking) if booking else None,
     )
 
 
@@ -191,7 +191,10 @@ async def admin_status(callback: CallbackQuery) -> None:
             await callback.answer(str(exc), show_alert=True)
             return
     await callback.answer("Статус обновлён.")
-    await callback.message.answer(booking_text(booking, title="Статус обновлён"))
+    await callback.message.edit_text(
+        booking_text(booking, title="Статус обновлён"),
+        reply_markup=admin_booking_markup(booking),
+    )
     try:
         await callback.bot.send_message(
             booking.telegram_user_id,

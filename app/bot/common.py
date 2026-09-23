@@ -7,9 +7,20 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiohttp import ClientError
 
 from app.config import Settings
-from app.database.models import Booking
+from app.database.models import Booking, BookingStatus
 
 logger = logging.getLogger(__name__)
+
+STATUS_LABELS = {
+    BookingStatus.PENDING: "ожидает подтверждения",
+    BookingStatus.CONFIRMED: "подтверждена",
+    BookingStatus.CANCELLED: "отменена",
+    BookingStatus.COMPLETED: "выполнена",
+}
+
+
+def status_label(status: BookingStatus | str) -> str:
+    return STATUS_LABELS[BookingStatus(status)]
 
 
 def brief_html(value: str, limit: int) -> str:
@@ -27,34 +38,35 @@ def booking_text(booking: Booking, *, title: str = "Запись") -> str:
         f"💰 от {booking.service.price_from:,.0f} ₽\n"
         f"📅 {booking.booking_date:%d.%m.%Y}\n"
         f"🕒 {booking.start_time:%H:%M}\n"
-        f"Статус: {booking.status}{comment}"
+        f"Статус: {status_label(booking.status)}{comment}"
     )
 
 
-def admin_booking_markup(booking_id: int) -> InlineKeyboardMarkup:
+def admin_booking_markup(booking: Booking) -> InlineKeyboardMarkup | None:
+    if booking.status == BookingStatus.PENDING:
+        actions = [
+            ("✅ Подтвердить", BookingStatus.CONFIRMED),
+            ("❌ Отменить", BookingStatus.CANCELLED),
+        ]
+    elif booking.status == BookingStatus.CONFIRMED:
+        actions = [
+            ("❌ Отменить", BookingStatus.CANCELLED),
+            ("🏁 Выполнено", BookingStatus.COMPLETED),
+        ]
+    else:
+        return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Подтвердить", callback_data=f"as:confirmed:{booking_id}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="❌ Отменить", callback_data=f"as:cancelled:{booking_id}"
-                ),
-                InlineKeyboardButton(
-                    text="🏁 Выполнено", callback_data=f"as:completed:{booking_id}"
-                ),
-            ],
+            [InlineKeyboardButton(text=label, callback_data=f"as:{status}:{booking.id}")]
+            for label, status in actions
         ]
     )
 
 
 async def notify_admins(
-    bot: Bot, settings: Settings, text: str, booking_id: int | None = None
+    bot: Bot, settings: Settings, text: str, booking: Booking | None = None
 ) -> None:
-    markup = admin_booking_markup(booking_id) if booking_id is not None else None
+    markup = admin_booking_markup(booking) if booking is not None else None
     for admin_id in settings.admins:
         try:
             await bot.send_message(admin_id, text, reply_markup=markup)

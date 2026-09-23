@@ -1,6 +1,7 @@
+from contextlib import asynccontextmanager
 from datetime import date, datetime, time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -8,12 +9,14 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.bot.callbacks import parse_callback_id
-from app.bot.common import admin_booking_markup, booking_text
-from app.bot.handlers import admin_services
+from app.bot.common import admin_booking_markup, booking_text, status_label
+from app.bot.handlers import admin, admin_services, profile
 from app.bot.handlers.admin import is_admin
 from app.config import get_settings
+from app.database.models import BookingStatus, Service
 from app.database.session import get_session
-from app.services.bookings import normalize_phone
+from app.services import bookings
+from app.services.bookings import normalize_car, normalize_phone
 from app.services.catalog import CatalogError, validate_duration, validate_price
 from app.services.export import excel_safe
 from app.services.reminders import reminder_kind, reminder_text
@@ -96,12 +99,187 @@ def test_admin_access(monkeypatch):
 
 
 def test_admin_callback_fits_telegram_limit():
-    markup = admin_booking_markup(9223372036854775807)
+    markup = admin_booking_markup(
+        SimpleNamespace(id=9223372036854775807, status=BookingStatus.PENDING)
+    )
     assert all(
         len(button.callback_data.encode("utf-8")) <= 64
         for row in markup.inline_keyboard
         for button in row
     )
+
+
+@pytest.mark.parametrize(
+    "status,label",
+    [
+        (BookingStatus.PENDING, "ожидает подтверждения"),
+        (BookingStatus.CONFIRMED, "подтверждена"),
+        (BookingStatus.CANCELLED, "отменена"),
+        (BookingStatus.COMPLETED, "выполнена"),
+    ],
+)
+def test_booking_status_labels(status, label):
+    booking = SimpleNamespace(
+        id=1,
+        customer_name="Test",
+        phone="+79991234567",
+        car="BMW 320d",
+        service=SimpleNamespace(name="Wash", price_from=1000),
+        booking_date=date(2026, 9, 24),
+        start_time=time(11),
+        status=status,
+        comment=None,
+    )
+    assert status_label(status.value) == label
+    assert f"Статус: {label}" in booking_text(booking)
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        (
+            BookingStatus.PENDING,
+            [("✅ Подтвердить", "as:confirmed:42"), ("❌ Отменить", "as:cancelled:42")],
+        ),
+        (
+            BookingStatus.CONFIRMED,
+            [("❌ Отменить", "as:cancelled:42"), ("🏁 Выполнено", "as:completed:42")],
+        ),
+        (BookingStatus.CANCELLED, []),
+        (BookingStatus.COMPLETED, []),
+    ],
+)
+def test_admin_booking_markup_by_status(status, expected):
+    markup = admin_booking_markup(SimpleNamespace(id=42, status=status))
+    assert (
+        [(button.text, button.callback_data) for row in markup.inline_keyboard for button in row]
+        if markup
+        else []
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("BMW 320d", "BMW 320d"),
+        ("  Lada   2107  ", "Lada 2107"),
+        ("Лада\tВеста", "Лада Веста"),
+        ("X5", "X5"),
+    ],
+)
+def test_normalize_car(raw, expected):
+    assert normalize_car(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["123", "---", "!!!", "A", "", "A" * 121])
+def test_invalid_car(raw):
+    with pytest.raises(ValueError):
+        normalize_car(raw)
+
+
+async def test_new_booking_is_pending(monkeypatch):
+    service = Service(id=1, name="Wash", price_from=1000, duration_minutes=60)
+    session = SimpleNamespace(
+        scalar=AsyncMock(return_value=service),
+        execute=AsyncMock(),
+        add=Mock(),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    monkeypatch.setattr(bookings, "slots_for_service", AsyncMock(return_value=[time(11)]))
+    booking = await bookings.create_booking(
+        session,
+        user_id=1,
+        username=None,
+        customer_name="User",
+        phone="+79991234567",
+        car="  Лада  Веста ",
+        service_id=1,
+        day=date(2026, 9, 24),
+        start_at=time(11),
+        comment=None,
+        work_start=time(10),
+        work_end=time(20),
+        work_days=frozenset({3}),
+        step=30,
+        now=datetime(2026, 9, 23, 11, tzinfo=ZoneInfo("Europe/Moscow")),
+    )
+    assert booking.status == BookingStatus.PENDING
+    assert booking.car == "Лада Веста"
+
+
+async def test_profile_uses_current_status(monkeypatch):
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    item = SimpleNamespace(
+        id=5,
+        service=SimpleNamespace(name="Wash"),
+        car="BMW 320d",
+        booking_date=date(2026, 9, 24),
+        start_time=time(11),
+        status=BookingStatus.PENDING,
+    )
+    monkeypatch.setattr(profile, "session_factory", fake_session)
+    monkeypatch.setattr(
+        profile, "business_values", AsyncMock(return_value={"timezone": "Europe/Moscow"})
+    )
+    monkeypatch.setattr(profile, "user_bookings", AsyncMock(return_value=[item]))
+    message = SimpleNamespace(from_user=SimpleNamespace(id=1), answer=AsyncMock())
+    await profile.my_bookings(message)
+    assert "Статус: ожидает подтверждения" in message.answer.await_args.args[0]
+
+
+@pytest.mark.parametrize(
+    "status,action,expected_callbacks",
+    [
+        (BookingStatus.CONFIRMED, "confirmed", ["as:cancelled:42", "as:completed:42"]),
+        (BookingStatus.CANCELLED, "cancelled", []),
+        (BookingStatus.COMPLETED, "completed", []),
+    ],
+)
+async def test_admin_status_updates_original_message(
+    monkeypatch, status, action, expected_callbacks
+):
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    booking = SimpleNamespace(
+        id=42,
+        telegram_user_id=1,
+        customer_name="User",
+        phone="+79991234567",
+        car="BMW 320d",
+        service=SimpleNamespace(name="Wash", price_from=1000),
+        booking_date=date(2026, 9, 24),
+        start_time=time(11),
+        status=status,
+        comment=None,
+    )
+    monkeypatch.setattr(admin, "is_admin", lambda user_id: True)
+    monkeypatch.setattr(admin, "session_factory", fake_session)
+    monkeypatch.setattr(
+        admin, "business_values", AsyncMock(return_value={"timezone": "Europe/Moscow"})
+    )
+    monkeypatch.setattr(admin, "change_status", AsyncMock(return_value=booking))
+    message = SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock())
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=9),
+        data=f"as:{action}:42",
+        message=message,
+        answer=AsyncMock(),
+        bot=SimpleNamespace(send_message=AsyncMock()),
+    )
+    await admin.admin_status(callback)
+    (text,) = message.edit_text.await_args.args
+    assert f"Статус: {status_label(status)}" in text
+    markup = message.edit_text.await_args.kwargs["reply_markup"]
+    assert (
+        [button.callback_data for row in markup.inline_keyboard for button in row] if markup else []
+    ) == expected_callbacks
+    message.answer.assert_not_awaited()
 
 
 @pytest.mark.parametrize("raw", ["", "0", "-1", "９", "9x", "9" * 40])

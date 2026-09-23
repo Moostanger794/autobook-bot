@@ -90,6 +90,10 @@ async def _book(maker, user_id, at):
 
 async def test_double_booking_and_cancellation(db):
     first = await _book(db, 101, time(11))
+    assert first.status == BookingStatus.PENDING
+    async with db() as session:
+        with pytest.raises(BookingUnavailable):
+            await change_status(session, first.id, BookingStatus.COMPLETED)
     with pytest.raises(SlotUnavailable):
         await _book(db, 102, time(11, 30))
     async with db() as session:

@@ -30,6 +30,13 @@ def normalize_phone(value: str) -> str:
     return phone
 
 
+def normalize_car(value: str) -> str:
+    car = " ".join(value.split())
+    if not 2 <= len(car) <= 120 or not any(char.isalpha() for char in car):
+        raise ValueError("Введите марку и модель автомобиля текстом (2–120 символов).")
+    return car
+
+
 async def list_services(session: AsyncSession) -> list[Service]:
     return list(
         (await session.scalars(select(Service).where(Service.is_active).order_by(Service.id))).all()
@@ -100,13 +107,13 @@ async def create_booking(
         telegram_username=username,
         customer_name=customer_name[:150],
         phone=normalize_phone(phone),
-        car=car[:120],
+        car=normalize_car(car),
         service_id=service_id,
         booking_date=day,
         start_time=start_at,
         end_time=end_time(start_at, service.duration_minutes),
         comment=comment,
-        status=BookingStatus.CONFIRMED,
+        status=BookingStatus.PENDING,
     )
     session.add(booking)
     try:
@@ -176,6 +183,10 @@ async def change_status(
         raise BookingUnavailable("Прошедшую запись нельзя отменить.")
     if booking.status == BookingStatus.COMPLETED:
         raise BookingUnavailable("Запись уже выполнена.")
+    if (status == BookingStatus.CONFIRMED and booking.status != BookingStatus.PENDING) or (
+        status == BookingStatus.COMPLETED and booking.status != BookingStatus.CONFIRMED
+    ):
+        raise BookingUnavailable("Действие недоступно для текущего статуса.")
     booking.status = status
     await session.commit()
     logger.info("Booking %s changed to %s by %s", booking.id, status, actor_id or "admin")
